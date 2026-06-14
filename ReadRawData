@@ -1,1 +1,112 @@
+#include <Wire.h>
+#include <math.h>
 
+#define MPU_ADDR           0x68
+#define SAMPLE_RATE_HZ     100      
+
+float ax_off = 0.0f, ay_off = 0.0f, az_off = 0.0f; [cite: 3]
+float gx_off = 0.0f, gy_off = 0.0f, gz_off = 0.0f; [cite: 4]
+int16_t raw_ax, raw_ay, raw_az; [cite: 4]
+int16_t raw_gx, raw_gy, raw_gz; [cite: 4]
+bool system_ready = false; [cite: 5]
+
+void readMPU() {
+  Wire.beginTransmission(MPU_ADDR); Wire.write(0x3B); Wire.endTransmission(false); [cite: 15]
+  Wire.requestFrom(MPU_ADDR, 14, true); [cite: 15]
+  if (Wire.available() >= 14) { [cite: 16]
+    raw_ax = Wire.read()<<8 | Wire.read(); raw_ay = Wire.read()<<8 | Wire.read(); [cite: 16]
+    raw_az = Wire.read()<<8 | Wire.read(); [cite: 17]
+    Wire.read(); Wire.read(); 
+    raw_gx = Wire.read()<<8 | Wire.read(); raw_gy = Wire.read()<<8 | Wire.read(); [cite: 17]
+    raw_gz = Wire.read()<<8 | Wire.read(); [cite: 18]
+  }
+}
+
+void initMPU() {
+  Wire.beginTransmission(MPU_ADDR); Wire.write(0x6B); Wire.write(0x01); Wire.endTransmission(); delay(50); [cite: 18]
+  Wire.beginTransmission(MPU_ADDR); Wire.write(0x1A); Wire.write(0x03); Wire.endTransmission();  [cite: 18]
+  Wire.beginTransmission(MPU_ADDR); Wire.write(0x1B); Wire.write(0x00); Wire.endTransmission();  [cite: 18, 19]
+  Wire.beginTransmission(MPU_ADDR); Wire.write(0x1C); Wire.write(0x00); Wire.endTransmission();  [cite: 19]
+}
+
+void runCalibrationRoutine() {
+  Serial.println(F("\nBat dau do 500 mau Gyro Offset... GIU YEN LANG...")); [cite: 19]
+  long sum_gx = 0, sum_gy = 0, sum_gz = 0; [cite: 20]
+  for (int i = 0; i < 500; i++) { [cite: 21]
+    readMPU();
+    sum_gx += raw_gx; sum_gy += raw_gy; sum_gz += raw_gz; [cite: 21, 22]
+    delay(6); 
+  }
+  gx_off = (sum_gx / 500.0f) / 131.0f; [cite: 22]
+  gy_off = (sum_gy / 500.0f) / 131.0f; [cite: 22]
+  gz_off = (sum_gz / 500.0f) / 131.0f; [cite: 23]
+
+  Serial.println(F("\nQuy trinh do 6 vi tri chuan cho Accelerometer...")); [cite: 23]
+  float m_az_up = 0, m_az_down = 0, m_ax_up = 0, m_ax_down = 0, m_ay_up = 0, m_ay_down = 0; [cite: 24]
+  const char* prompts[] = { 
+    "Z huong doc dung LEN TROI (+1g)", "Z huong doc dung XUONG DAT (-1g)", 
+    "X huong doc dung LEN TROI (+1g)", "X huong doc dung XUONG DAT (-1g)", 
+    "Y huong doc dung LEN TROI (+1g)", "Y huong doc dung XUONG DAT (-1g)" 
+  }; [cite: 25]
+  float* targets[] = { &m_az_up, &m_az_down, &m_ax_up, &m_ax_down, &m_ay_up, &m_ay_down }; [cite: 26]
+
+  for (int step = 0; step < 6; step++) {
+    while(Serial.available() > 0) { Serial.read(); }  [cite: 27, 28]
+    Serial.print(F("DAT CAM BIEN: ")); Serial.println(prompts[step]); [cite: 28]
+    Serial.println(F(">> Go chu 'g' roi Enter de do...")); [cite: 29]
+    while (true) { if (Serial.available() > 0) { char ch = Serial.read(); if (ch == 'g' || ch == 'G') break; } } [cite: 29, 30]
+    Serial.print(F(">> Cho on dinh...")); [cite: 30]
+    for(int s = 0; s < 20; s++) { readMPU(); delay(100); } [cite: 31]
+    double sum = 0; [cite: 32]
+    for (int i = 0; i < 200; i++) {
+      readMPU();
+      if (step == 0 || step == 1) sum += (raw_az / 16384.0f); [cite: 33]
+      if (step == 2 || step == 3) sum += (raw_ax / 16384.0f); [cite: 34]
+      if (step == 4 || step == 5) sum += (raw_ay / 16384.0f); [cite: 35]
+      delay(10);
+    }
+    *targets[step] = sum / 200.0f; [cite: 36]
+  }
+  ax_off = -((m_ax_up + m_ax_down) / 2.0f); [cite: 37]
+  ay_off = -((m_ay_up + m_ay_down) / 2.0f); [cite: 38]
+  az_off = -((m_az_up + m_az_down) / 2.0f); [cite: 39]
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(); Wire.setClock(400000); 
+  initMPU();
+  runCalibrationRoutine();   
+  system_ready = true; [cite: 50]
+}
+
+void loop() {
+  if (!system_ready) return; [cite: 55]
+
+  double M_ax = 0, S_ax = 0, M_ay = 0, S_ay = 0, M_az = 0, S_az = 0; [cite: 62]
+  double M_gx = 0, S_gx = 0, M_gy = 0, S_gy = 0, M_gz = 0, S_gz = 0; [cite: 63]
+  
+  Serial.println(F(">> Dang quet thong ke 500 mau...")); [cite: 64]
+  for (int i = 1; i <= 500; i++) { [cite: 64]
+    readMPU();
+    float ax = (raw_ax / 16384.0f) + ax_off; float ay = (raw_ay / 16384.0f) + ay_off; float az = (raw_az / 16384.0f) + az_off; [cite: 65, 66]
+    float gx = (raw_gx / 131.0f) - gx_off; float gy = (raw_gy / 131.0f) - gy_off; float gz = (raw_gz / 131.0f) - gz_off; [cite: 66, 67]
+
+    double old_M;
+    old_M = M_ax; M_ax += (ax - M_ax)/i; S_ax += (ax - M_ax)*(ax - old_M); [cite: 68]
+    old_M = M_ay; M_ay += (ay - M_ay)/i; S_ay += (ay - M_ay)*(ay - old_M); [cite: 68, 69]
+    old_M = M_az; M_az += (az - M_az)/i; S_az += (az - M_az)*(az - old_M); [cite: 69, 70]
+    old_M = M_gx; M_gx += (gx - M_gx)/i; S_gx += (gx - M_gx)*(gx - old_M); [cite: 70, 71]
+    old_M = M_gy; M_gy += (gy - M_gy)/i; S_gy += (gy - M_gy)*(gy - old_M); [cite: 71, 72]
+    old_M = M_gz; M_gz += (gz - M_gz)/i; S_gz += (gz - M_gz)*(gz - old_M); [cite: 72, 73]
+    delay(10); [cite: 74]
+  }
+
+  Serial.println(F("\n--- KET QUA THONG KE DAC TINH TINH ---")); [cite: 75]
+  Serial.print(F("Noise STD Acc: Ax=")); Serial.print(sqrt(S_ax/500.0f), 5); [cite: 76, 77]
+  Serial.print(F(", Ay=")); Serial.print(sqrt(S_ay/500.0f), 5); Serial.print(F(", Az=")); Serial.println(sqrt(S_az/500.0f), 5); [cite: 77]
+  Serial.print(F("Noise STD Gyro: Gx=")); Serial.print(sqrt(S_gx/500.0f), 5); [cite: 78, 79]
+  Serial.print(F(", Gy=")); Serial.print(sqrt(S_gy/500.0f), 5); Serial.print(F(", Gz=")); Serial.println(sqrt(S_gz/500.0f), 5); [cite: 79]
+
+  system_ready = false; while(1); [cite: 79]
+}
